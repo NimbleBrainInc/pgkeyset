@@ -70,6 +70,7 @@ later skips as malformed still advances the walk.
 | A timestamp column is `timestamptz` (`DateTime(timezone=True)`). | A naive value is read in the session's zone, so the same cursor means different instants. | `TypeError` |
 | No float columns. | A float's cursor value is not the value the row holds. Use `numeric`. | `TypeError` |
 | A computed expression passes `value=` to read its key from a row. | The cursor needs the value the row sorted by. | `ValueError` |
+| The statement passed to `apply` has no ORDER BY of its own. | SQLAlchemy appends ORDER BY clauses, so an existing one would sort ahead of the listing's, and pages would follow an order the cursor does not. | `ValueError` from `apply` |
 
 The library checks that the last column cannot be NULL. It does not check that it is
 unique: declare your primary key there.
@@ -192,7 +193,7 @@ asyncpg.
 | Name | What it is |
 |---|---|
 | `Listing(name, *sorts)` | One paged read: its cursor tag and its total order. |
-| `Listing.apply(stmt, cursor)` | `stmt` ordered, and started strictly after `cursor` when one is given. |
+| `Listing.apply(stmt, cursor)` | `stmt`, which must be unordered, ordered by the listing and started strictly after `cursor` when one is given. |
 | `Listing.paginate(rows, limit)` | Split a `limit + 1` fetch into `(page, next_cursor)`. |
 | `Listing.after(key)`, `.key(row)`, `.encode(key)`, `.decode(cursor)` | The predicate, a row's key, and the codec, for custom flows such as a change feed's mark. |
 | `Sort.asc(expr, *, nulls=None, value=None)`, `Sort.desc(...)` | One column of the order. |

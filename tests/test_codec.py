@@ -177,6 +177,16 @@ def test_order_by_spells_out_null_placement_only_where_nulls_exist() -> None:
     assert compiled.endswith("ORDER BY item.created_at DESC, item.id DESC")
 
 
+def test_an_already_ordered_statement_is_refused() -> None:
+    with pytest.raises(ValueError, match="owns the order") as raised:
+        NEWEST.apply(sa.select(ITEM).order_by(ITEM.c.id.asc()), None)
+    assert not isinstance(raised.value, InvalidCursor)
+    with pytest.raises(ValueError, match="owns the order"):
+        NEWEST.apply(
+            sa.select(ITEM).order_by(ITEM.c.created_at.desc()), NEWEST.encode((WHEN, "it_1"))
+        )
+
+
 def test_a_declaration_that_cannot_page_safely_is_refused() -> None:
     with pytest.raises(ValueError, match="nullable"):
         Sort.asc(ITEM.c.seen_at)

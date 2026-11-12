@@ -180,8 +180,12 @@ class Listing:
         """Order ``stmt`` by this listing and, given a cursor, start strictly after it.
 
         An empty or absent cursor is the first page. The caller adds ``.limit(limit + 1)``.
-        Raises :class:`InvalidCursor` for a cursor that is not a position in this listing.
+        Raises :class:`InvalidCursor` for a cursor that is not a position in this listing, and
+        ``ValueError`` for a ``stmt`` that is already ordered: the listing owns the order, and an
+        ORDER BY ahead of it would page in an order the cursor does not follow.
         """
+        if stmt._order_by_clauses:
+            raise ValueError(f"{self!r} owns the order: pass a statement without ORDER BY")
         stmt = stmt.order_by(*(sort.order() for sort in self.order))
         if cursor:
             stmt = stmt.where(self.after(self.decode(cursor)))
