@@ -1,0 +1,107 @@
+name: Release
+
+# A version tag (v0.1.0) builds the distributions once, tests the exact files built, and
+# publishes them to PyPI with trusted publishing (OIDC): no API token exists anywhere. PyPI
+# trusts this repository, this file (release.yml) and the `pypi` environment by name. Only
+# admins can push a version tag, and a version can never be uploaded twice, so nothing is
+# published until the built wheel has passed the shipped test suite on every supported Python.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - name: The tag names the version in pyproject.toml
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(uv version --short)
+          test "$TAG" = "v$version" || { echo "tag $TAG does not match version $version"; exit 1; }
+      - run: uv build
+      - name: The wheel installs and imports on its own
+        run: uv run --isolated --no-project --with dist/*.whl python -c "import pgkeyset; print(pgkeyset.__name__)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # The built wheel, installed into a clean environment, against the test suite the sdist ships.
+  # The tests run from a directory with no source tree, so they can only import the wheel.
+  test-dist:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 25
+    env:
+      PGKEYSET_TEST_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unpack the shipped tests apart from any source
+        run: |
+          mkdir sdist run
+          tar xzf dist/*.tar.gz -C sdist
+          cp -r sdist/*/tests run/tests
+          printf '[pytest]\nasyncio_mode = auto\nasyncio_default_fixture_loop_scope = function\n' > run/pytest.ini
+      - name: Install the wheel into a clean environment
+        run: |
+          uv venv venv
+          VIRTUAL_ENV=venv uv pip install dist/*.whl "sqlalchemy[asyncio]" pytest pytest-asyncio asyncpg
+      - name: Run the suite against the installed wheel
+        working-directory: run
+        run: |
+          ../venv/bin/python -c "import pgkeyset, sys; assert 'site-packages' in pgkeyset.__file__, pgkeyset.__file__"
+          ../venv/bin/python -m pytest -q -p no:cacheprovider
+
+  pypi:
+    needs: test-dist
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pgkeyset
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

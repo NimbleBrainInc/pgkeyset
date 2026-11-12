@@ -1,0 +1,121 @@
+== bigint ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS BIGINT), item.id) < ($1::BIGINT, $2::VARCHAR) ORDER BY CAST(item.status AS BIGINT) DESC, item.id DESC
+param_1 = 9007199254740993
+param_2 = 'it_9'
+
+== int_band ==
+SELECT item.id
+FROM item
+WHERE CASE WHEN (item.status = $1::VARCHAR) THEN $2::INTEGER ELSE $3::INTEGER END > $4::INTEGER OR CASE WHEN (item.status = $1::VARCHAR) THEN $2::INTEGER ELSE $3::INTEGER END = $5::INTEGER AND item.created_at < $6::TIMESTAMP WITH TIME ZONE OR CASE WHEN (item.status = $1::VARCHAR) THEN $2::INTEGER ELSE $3::INTEGER END = $7::INTEGER AND item.created_at = $8::TIMESTAMP WITH TIME ZONE AND item.id < $9::VARCHAR ORDER BY CASE WHEN (item.status = $1::VARCHAR) THEN $2::INTEGER ELSE $3::INTEGER END ASC, item.created_at DESC, item.id DESC
+param_1 = 0
+param_2 = 1
+param_3 = 1
+param_4 = 1
+param_5 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_6 = 1
+param_7 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_8 = 'it_7'
+status_1 = 'draft'
+
+== nulls_first_in_band ==
+SELECT item.id
+FROM item
+WHERE item.seen_at IS NOT NULL OR item.seen_at IS NULL AND item.id > $1::VARCHAR ORDER BY item.seen_at ASC NULLS FIRST, item.id ASC
+param_1 = 'it_3'
+
+== nulls_first_value ==
+SELECT item.id
+FROM item
+WHERE item.seen_at > $1::TIMESTAMP WITH TIME ZONE OR item.seen_at = $2::TIMESTAMP WITH TIME ZONE AND item.id > $3::VARCHAR ORDER BY item.seen_at ASC NULLS FIRST, item.id ASC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_3 = 'it_3'
+
+== nulls_last_in_band ==
+SELECT item.id
+FROM item
+WHERE item.seen_at IS NULL AND item.id < $1::VARCHAR ORDER BY item.seen_at DESC NULLS LAST, item.id DESC
+param_1 = 'it_4'
+
+== nulls_last_value ==
+SELECT item.id
+FROM item
+WHERE item.seen_at < $1::TIMESTAMP WITH TIME ZONE OR item.seen_at IS NULL OR item.seen_at = $2::TIMESTAMP WITH TIME ZONE AND item.id < $3::VARCHAR ORDER BY item.seen_at DESC NULLS LAST, item.id DESC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_3 = 'it_4'
+
+== num ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS NUMERIC), item.id) > ($1::NUMERIC, $2::VARCHAR) ORDER BY CAST(item.status AS NUMERIC) ASC, item.id ASC
+param_1 = Decimal('27.10')
+param_2 = 'it_8'
+
+== num_long ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS NUMERIC), item.id) > ($1::NUMERIC, $2::VARCHAR) ORDER BY CAST(item.status AS NUMERIC) ASC, item.id ASC
+param_1 = Decimal('12345678901234567890.123456789')
+param_2 = 'it_8'
+
+== num_negative_small ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS NUMERIC), item.id) > ($1::NUMERIC, $2::VARCHAR) ORDER BY CAST(item.status AS NUMERIC) ASC, item.id ASC
+param_1 = Decimal('-0.000001')
+param_2 = 'it_8'
+
+== smallint ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS SMALLINT), item.id) > ($1::SMALLINT, $2::VARCHAR) ORDER BY CAST(item.status AS SMALLINT) ASC, item.id ASC
+param_1 = -32768
+param_2 = 'it_9'
+
+== str_escaped ==
+SELECT item.id
+FROM item
+WHERE item.status > $1::VARCHAR OR item.status = $2::VARCHAR AND item.id < $3::VARCHAR ORDER BY item.status ASC, item.id DESC
+param_1 = 'Zoë "q" \\ 🚀'
+param_2 = 'Zoë "q" \\ 🚀'
+param_3 = 'it_6'
+
+== str_mixed ==
+SELECT item.id
+FROM item
+WHERE item.status > $1::VARCHAR OR item.status = $2::VARCHAR AND item.id < $3::VARCHAR ORDER BY item.status ASC, item.id DESC
+param_1 = 'draft'
+param_2 = 'draft'
+param_3 = 'it_5'
+
+== ts_asc ==
+SELECT item.id
+FROM item
+WHERE (item.created_at, item.id) > ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR) ORDER BY item.created_at ASC, item.id ASC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = 'it_1'
+
+== ts_desc ==
+SELECT item.id
+FROM item
+WHERE (item.created_at, item.id) < ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR) ORDER BY item.created_at DESC, item.id DESC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = 'it_1'
+
+== ts_other_zone ==
+SELECT item.id
+FROM item
+WHERE (item.created_at, item.id) < ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR) ORDER BY item.created_at DESC, item.id DESC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = 'it_2'
+
+== ts_whole_second ==
+SELECT item.id
+FROM item
+WHERE (item.created_at, item.id) < ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR) ORDER BY item.created_at DESC, item.id DESC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc)
+param_2 = 'it_1'
+

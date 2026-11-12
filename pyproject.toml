@@ -1,0 +1,67 @@
+[project]
+name = "pgkeyset"
+version = "0.1.0"
+description = "Strict keyset pagination for async SQLAlchemy on Postgres, for APIs and agent tools. Refuses at declaration the orders that silently lose or repeat rows, tags each cursor with its listing, and fails a bad cursor with one safe message."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "NimbleBrain, Inc." }]
+requires-python = ">=3.12"
+dependencies = ["sqlalchemy>=2.0.36"]
+keywords = ["postgres", "pagination", "keyset", "cursor", "sqlalchemy", "asyncio", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/NimbleBrainInc/pgkeyset"
+Issues = "https://github.com/NimbleBrainInc/pgkeyset/issues"
+Changelog = "https://github.com/NimbleBrainInc/pgkeyset/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+# asyncpg is test-only. The walk suites run against a real Postgres: NULL ordering and the
+# typed binds asyncpg insists on are the things under test, and a fake has neither.
+dev = [
+    "asyncpg>=0.30",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "ty>=0.0.1a1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pgkeyset"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/pgkeyset", "tests", "README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE", "NOTICE"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.uv]
+# Resolve only releases at least two weeks old, so a dependency published hours ago (or a
+# compromised one) never lands in the lock before anyone could notice.
+exclude-newer = "2 weeks"
