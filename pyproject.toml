@@ -60,3 +60,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.uv]
+# Resolve only releases at least two weeks old, so a dependency published hours ago (or a
+# compromised one) never lands in the lock before anyone could notice.
+exclude-newer = "2 weeks"
