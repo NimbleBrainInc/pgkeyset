@@ -77,6 +77,7 @@ def test_a_cursor_from_another_listing_is_refused() -> None:
         _raw(["items", "9999-12-31T23:59:59-05:00", "it_1"]),  # after datetime.max in UTC
         _raw(["items", WHEN.isoformat(), "a\ud800b"]),  # a lone surrogate, not encodable UTF-8
         base64.urlsafe_b64encode(b"\xff\xfe").decode(),
+        base64.urlsafe_b64encode(b"[" * 100_000 + b"]" * 100_000).decode(),  # nesting
     ],
 )
 def test_a_malformed_cursor_is_refused_with_fixed_text(cursor: str) -> None:

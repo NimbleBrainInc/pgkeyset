@@ -250,7 +250,8 @@ class Listing:
         try:
             padded = cursor + "=" * (-len(cursor) % 4)
             parts = json.loads(base64.urlsafe_b64decode(padded.encode()))
-        except (binascii.Error, UnicodeError, ValueError):
+        # A cursor of deeply nested arrays exhausts the parser's recursion limit.
+        except (binascii.Error, UnicodeError, ValueError, RecursionError):
             raise InvalidCursor from None
         if not isinstance(parts, list) or len(parts) != len(self.order) + 1:
             raise InvalidCursor

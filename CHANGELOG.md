@@ -20,7 +20,8 @@ First release.
 - The cursor: `base64url(JSON [listing, *key])`, with timestamps as ISO-8601 with a zone and
   `numeric` values as decimal strings.
 - `InvalidCursor`, a `ValueError` whose text is always `INVALID_CURSOR_MESSAGE`, for any
-  cursor that is not a position in the listing.
+  cursor that is not a position in the listing, including one nested deeply enough to exhaust
+  the JSON parser's recursion limit.
 - `pgkeyset.testing.walk`: walks a listing to its end, failing on a row met twice or never met.
 
 [0.1.0]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.1.0
