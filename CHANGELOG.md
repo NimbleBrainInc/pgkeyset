@@ -6,6 +6,36 @@ All notable changes to this project are recorded here. The format follows
 The cursor encoding and the SQL a cursor resumes with are pinned by golden tests; a change to
 either is a breaking change in any version.
 
+## [0.1.1] - 2026-11-13
+
+Cursors issued by 0.1.0 decode and resume exactly as before; the golden cursor and SQL files
+only gained cases.
+
+### Added
+
+- `uuid` sort keys (`Uuid`, `postgresql.UUID`): carried in canonical form, decoded to
+  `uuid.UUID` (or `str` for `Uuid(as_uuid=False)`). A uuid primary key can be the tiebreak.
+- String `Enum` sort keys: a cursor value must be one of the enum's labels.
+- `pgkeyset.__version__`.
+
+### Fixed
+
+- A `numeric` cursor value beyond what asyncpg binds exactly (more than 131072 digits before
+  the point, or more than 16383 after it) raised a driver error or bound as 0 and resumed at
+  the wrong position. It is now refused with `InvalidCursor`, as is a value beyond a declared
+  `numeric(p, s)`, which the bind's cast would have rounded or overflowed.
+- A cursor that is not a string, or is longer than 1 MiB, raises `InvalidCursor`.
+- `walk` checks with explicit raises, so its failures hold under `python -O`.
+
+### Changed
+
+- Refused at declaration: an enum column backed by a Python enum class, and a `numeric`
+  column with `asdecimal=False`. Neither could page correctly.
+- `encode` raises `ValueError` for a non-finite `Decimal` or a float `numeric` key, and
+  `paginate` for a negative `limit`: server bugs, like a naive timestamp.
+- Requires SQLAlchemy 2.0.37 or later; 2.0.36 binds a `smallint` key as `integer`.
+- Python 3.14 is supported and tested.
+
 ## [0.1.0] - 2026-11-12
 
 First release.
@@ -24,4 +54,5 @@ First release.
   the JSON parser's recursion limit.
 - `pgkeyset.testing.walk`: walks a listing to its end, failing on a row met twice or never met.
 
+[0.1.1]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.1.1
 [0.1.0]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.1.0

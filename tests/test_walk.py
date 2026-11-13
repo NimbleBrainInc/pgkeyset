@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Literal
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import ITEM
+from conftest import ITEM, TICKET
 from pgkeyset import InvalidCursor, Listing, Sort
 from pgkeyset.testing import walk
 
@@ -142,3 +146,108 @@ async def test_a_cursor_from_another_listing_is_refused(engine: AsyncEngine) -> 
     assert cursor is not None
     with pytest.raises(InvalidCursor):
         await _page(engine, REVIEW, cursor, 1)
+
+
+#: Highest priority first (the enum's declared order, not the alphabet), largest amount next,
+#: and the uuid id as the tiebreak: one listing that binds all three kinds asyncpg types.
+TRIAGE = Listing(
+    "tickets:triage",
+    Sort.desc(TICKET.c.priority),
+    Sort.desc(TICKET.c.amount),
+    Sort.asc(TICKET.c.id),
+)
+
+
+async def test_uuid_enum_and_numeric_keys_walk_on_postgres(engine: AsyncEngine) -> None:
+    """The enum, ``numeric(10, 2)`` and ``uuid`` binds reach Postgres typed, and resume exactly.
+
+    Amounts repeat inside each priority, so the walk resumes inside ties on the first two keys
+    and the uuid decides. Rows are removed between pages, behind and ahead of the cursor.
+    """
+    rows = [
+        {
+            "id": uuid.UUID(int=i + 1),
+            "priority": ("low", "high", "urgent")[i % 3],
+            "amount": Decimal(f"{(i % 4) * 10}.50"),
+        }
+        for i in range(24)
+    ]
+    async with engine.begin() as conn:
+        await conn.execute(TICKET.insert(), rows)
+    async with engine.connect() as conn:
+        everything = (await conn.execute(TRIAGE.apply(sa.select(TICKET.c.id), None))).all()
+    order = [r.id for r in everything]
+    assert order[0] in {row["id"] for row in rows if row["priority"] == "urgent"}
+
+    removed: list[uuid.UUID] = []
+
+    async def fetch(cursor: str | None) -> tuple[list[sa.RowMapping], str | None]:
+        async with engine.connect() as conn:
+            stmt = TRIAGE.apply(sa.select(TICKET), cursor).limit(6)
+            page = (await conn.execute(stmt)).mappings().all()
+        return TRIAGE.paginate(page, 5)
+
+    async def churn(page: int) -> None:
+        # Remove the first remaining row (behind the cursor) and the last one (ahead of it).
+        gone = [order[page - 1], order[-page]]
+        removed.extend(gone)
+        async with engine.begin() as conn:
+            await conn.execute(TICKET.delete().where(TICKET.c.id.in_(gone)))
+
+    walked = await walk(fetch, ident=lambda r: r["id"], between_pages=churn)
+    walked_ids = [r["id"] for r in walked]
+    # Every row not removed ahead of the cursor came back once, in the listing's order.
+    assert walked_ids == [i for i in order if i in walked_ids]
+    assert set(order) - set(walked_ids) <= set(removed)
+
+
+async def test_a_cursor_outside_the_enum_or_the_numeric_column_is_refused(
+    engine: AsyncEngine,
+) -> None:
+    """Refused at decode with the fixed text, before any SQL reaches Postgres."""
+    valid = TRIAGE.encode(("high", Decimal("10.50"), uuid.UUID(int=1)))
+    raw = TRIAGE.decode(valid)
+    assert raw == ("high", Decimal("10.50"), uuid.UUID(int=1))
+
+    def cursor(*key: object) -> str:
+        return base64.urlsafe_b64encode(json.dumps(["tickets:triage", *key]).encode()).decode()
+
+    u = str(uuid.UUID(int=1))
+    for bad in (
+        cursor("bogus", "10.50", u),  # not a label of the enum
+        cursor("high", "1.005", u),  # more decimals than numeric(10, 2) holds: would round
+        cursor("high", "123456789.0", u),  # more integer digits than it holds: overflow
+        cursor("high", "1E+131072", u),  # asyncpg would bind it as 0
+        cursor("high", "10.50", "ABCDEF01-2345-6789-ABCD-EF0123456789"),  # not canonical
+        cursor("high", "10.50", "abcdef0123456789abcdef0123456789"),  # not canonical
+        cursor("high", "10.50", "not-a-uuid"),
+    ):
+        with pytest.raises(InvalidCursor):
+            async with engine.connect() as conn:
+                await conn.execute(TRIAGE.apply(sa.select(TICKET), bad).limit(1))
+
+
+async def test_walk_catches_an_offset_listing(engine: AsyncEngine) -> None:
+    """The control: OFFSET paging skips a row when one ahead of it leaves, and walk says so."""
+    await _seed(engine, [{"id": f"it_{i:02}", "created_at": T0} for i in range(9)])
+
+    async def fetch_by_offset(cursor: str | None) -> tuple[list[sa.RowMapping], str | None]:
+        offset = int(cursor or 0)
+        async with engine.connect() as conn:
+            stmt = sa.select(ITEM).order_by(ITEM.c.id).offset(offset).limit(4)
+            page = (await conn.execute(stmt)).mappings().all()
+        more = len(page) > 3
+        return list(page[:3]), str(offset + 3) if more else None
+
+    async def remove_one_already_read(page: int) -> None:
+        async with engine.begin() as conn:
+            await conn.execute(ITEM.delete().where(ITEM.c.id == f"it_{page - 1:02}"))
+
+    expected = {f"it_{i:02}" for i in range(9)} - {"it_00", "it_01"}
+    with pytest.raises(AssertionError, match="never met"):
+        await walk(
+            fetch_by_offset,
+            ident=_ident,
+            expected=expected | {"it_00", "it_01"},
+            between_pages=remove_one_already_read,
+        )

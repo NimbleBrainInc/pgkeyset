@@ -25,8 +25,14 @@ async def walk[T](
 
     ``fetch(cursor)`` reads one page as ``(rows, next_cursor)``, passing the same filters
     every call. ``ident`` names a row. ``expected``, when given, is every row the walk must
-    meet: those that existed when it began and still match. ``between_pages(n)`` runs after
-    page ``n`` (from 1) when another page follows.
+    meet, and the only rows it may meet: those that existed when it began and still match.
+    A row ``between_pages`` inserts where the order has not yet reached is met too, so add its
+    id to ``expected``; one inserted behind the cursor is not met. ``between_pages(n)`` runs
+    after page ``n`` (from 1) when another page follows.
+
+    A failure raises ``AssertionError`` naming the page or the rows, so a test framework reports
+    it as a failed assertion. The checks are explicit raises, never ``assert`` statements, so
+    they hold under ``python -O`` too.
     """
     walked: list[T] = []
     seen: set[Hashable] = set()
@@ -35,12 +41,14 @@ async def walk[T](
         rows, next_cursor = await fetch(cursor)
         for row in rows:
             row_id = ident(row)
-            assert row_id not in seen, f"page {page_number} repeats {row_id!r}"
+            if row_id in seen:
+                raise AssertionError(f"page {page_number} repeats {row_id!r}")
             seen.add(row_id)
             walked.append(row)
         if next_cursor is None:
             break
-        assert rows, f"page {page_number} is empty but hands out a next_cursor"
+        if not rows:
+            raise AssertionError(f"page {page_number} is empty but hands out a next_cursor")
         if between_pages is not None:
             await between_pages(page_number)
         cursor = next_cursor
@@ -49,6 +57,10 @@ async def walk[T](
     if expected is not None:
         want = set(expected)
         missing, extra = want - seen, seen - want
-        assert not missing, f"the walk never met {sorted(map(repr, missing))}"
-        assert not extra, f"the walk met rows it should not have: {sorted(map(repr, extra))}"
+        if missing:
+            raise AssertionError(f"the walk never met {sorted(map(repr, missing))}")
+        if extra:
+            raise AssertionError(
+                f"the walk met rows it should not have: {sorted(map(repr, extra))}"
+            )
     return walked

@@ -22,7 +22,7 @@ MCP servers whose tools an agent calls page after page while it changes the same
 pip install pgkeyset        # or: uv add pgkeyset
 ```
 
-Python 3.12+, SQLAlchemy 2, Postgres. Tested with asyncpg on Postgres 14 and 17.
+Python 3.12+, SQLAlchemy 2.0.37+, Postgres. Tested with asyncpg on Postgres 14 and 17.
 
 ## Why keyset, never offset
 
@@ -68,12 +68,28 @@ later skips as malformed still advances the walk.
 | The last column is the row's unique, non-NULL id. | Two rows sharing a position split across a page boundary. | `ValueError` if it is declared nullable |
 | A nullable column says where its NULLs go: `Sort.asc(col, nulls="first")` or `"last"`. | A comparison against NULL is NULL, so a NULL band must be named on both sides of the cursor. | `ValueError` for a table column declared `nullable` without it |
 | A timestamp column is `timestamptz` (`DateTime(timezone=True)`). | A naive value is read in the session's zone, so the same cursor means different instants. | `TypeError` |
-| No float columns. | A float's cursor value is not the value the row holds. Use `numeric`. | `TypeError` |
+| No float columns, and a `numeric` column is read as `Decimal` (not `asdecimal=False`). | A float's cursor value is not the value the row holds. Use `numeric`. | `TypeError` |
+| An enum column has string labels (`Enum("low", "high", name=...)`), not a Python enum class. | The cursor carries the stored label; a Python enum maps members to labels through its class, which the cursor cannot follow back. | `TypeError` |
+| The column's type is one the cursor can carry (see below). | Anything else could not be written into a cursor and read back as the same value. | `TypeError` |
 | A computed expression passes `value=` to read its key from a row. | The cursor needs the value the row sorted by. | `ValueError` |
 | The statement passed to `apply` has no ORDER BY of its own. | SQLAlchemy appends ORDER BY clauses, so an existing one would sort ahead of the listing's, and pages would follow an order the cursor does not. | `ValueError` from `apply` |
 
 The library checks that the last column cannot be NULL. It does not check that it is
 unique: declare your primary key there.
+
+### Key types
+
+| Column type | In the cursor as | Decodes to |
+|---|---|---|
+| `timestamptz` (`DateTime(timezone=True)`) | ISO-8601 with its zone | an aware `datetime` in UTC |
+| `smallint`, `integer`, `bigint` | a JSON integer, checked against the column's width | `int` |
+| `text`, `varchar`, and string `Enum` | a JSON string; an enum value must be one of its labels | `str` |
+| `numeric`, `numeric(p, s)` | its exact decimal string, checked against the range the driver carries and against `p` and `s` when declared | `Decimal` |
+| `uuid` (`Uuid`, `postgresql.UUID`) | its canonical lowercase form | `uuid.UUID`, or `str` for `Uuid(as_uuid=False)` |
+
+Other types are refused at declaration, including `date`, `time`, `interval`, `boolean`,
+`bytea`, floats and JSON. Sort by one of the types above instead, for example a `date` column
+cast to `timestamptz`, with `value=` reading the cast value from the row.
 
 A computed column, such as a status band that puts drafts first:
 
@@ -117,9 +133,11 @@ so a cursor replayed by someone else returns only what they could already read.
 ### A bad cursor
 
 `decode` (and `apply`, which calls it) raises `InvalidCursor` for any cursor that is not a
-position in that listing: malformed, truncated, from another listing, a naive timestamp, a
-value out of its column's range. It is a `ValueError`, and its text is always
-`INVALID_CURSOR_MESSAGE`:
+position in that listing: malformed, truncated, not a string or longer than 1 MiB, from another
+listing, a naive timestamp, a value out of its column's range (an int past its width, a
+`numeric` past what the driver binds exactly or past its declared precision and scale), an enum
+value that is not one of its labels, or a `uuid` not in canonical form. It is a `ValueError`,
+and its text is always `INVALID_CURSOR_MESSAGE`:
 
 > The cursor is not a position in this listing.
 
@@ -166,7 +184,10 @@ walked = await walk(
 ```
 
 `walk` fails on a row met twice, a row in `expected` never met, a row met that is not in
-`expected`, an empty page that still hands out a cursor, or a walk that does not end.
+`expected`, an empty page that still hands out a cursor, or a walk that does not end. Each
+failure raises `AssertionError` (also under `python -O`). A row `between_pages` inserts where
+the order has not yet reached is met by the walk, so add its id to `expected`; one inserted
+behind the cursor is not met and must not be in it.
 
 ## Compared with sqlakeyset
 
@@ -183,6 +204,9 @@ pgkeyset is narrower and stricter:
   `numeric` values as exact decimal strings.
 - A pgkeyset cursor names its listing, and is refused anywhere else, with one fixed message.
 - pgkeyset ships the walk test.
+- sqlakeyset carries more value types in its bookmarks, including `date`, `time`, `bytes`
+  and `uuid`. pgkeyset carries the types in [Key types](#key-types): `uuid` but not `date`,
+  `time`, `boolean` or `bytes`.
 
 It pages forward only, targets Postgres only, and works on SQLAlchemy Core `select()`
 statements. It builds statements and never runs them; it is tested on async engines with
@@ -194,11 +218,12 @@ asyncpg.
 |---|---|
 | `Listing(name, *sorts)` | One paged read: its cursor tag and its total order. |
 | `Listing.apply(stmt, cursor)` | `stmt`, which must be unordered, ordered by the listing and started strictly after `cursor` when one is given. |
-| `Listing.paginate(rows, limit)` | Split a `limit + 1` fetch into `(page, next_cursor)`. |
+| `Listing.paginate(rows, limit)` | Split a `limit + 1` fetch into `(page, next_cursor)`. A negative `limit` raises `ValueError`. |
 | `Listing.after(key)`, `.key(row)`, `.encode(key)`, `.decode(cursor)` | The predicate, a row's key, and the codec, for custom flows such as a change feed's mark. |
 | `Sort.asc(expr, *, nulls=None, value=None)`, `Sort.desc(...)` | One column of the order. |
 | `InvalidCursor`, `INVALID_CURSOR_MESSAGE` | The refusal for a cursor that is not a position, and its fixed text. |
 | `pgkeyset.testing.walk(fetch, *, ident, expected=None, between_pages=None, max_pages=1000)` | The walk test. |
+| `pgkeyset.__version__` | The installed version. |
 
 ## Development
 

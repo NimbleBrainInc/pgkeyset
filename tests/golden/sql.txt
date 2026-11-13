@@ -119,3 +119,30 @@ WHERE (item.created_at, item.id) < ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR) O
 param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc)
 param_2 = 'it_1'
 
+
+== num_scaled ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS NUMERIC(10, 2)), item.id) < ($1::NUMERIC(10, 2), $2::VARCHAR) ORDER BY CAST(item.status AS NUMERIC(10, 2)) DESC, item.id DESC
+param_1 = Decimal('12345678.90')
+param_2 = 'it_8'
+
+== enum ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.status AS item_status), item.id) > ($1::item_status, $2::VARCHAR) ORDER BY CAST(item.status AS item_status) ASC, item.id ASC
+param_1 = 'sent'
+param_2 = 'it_5'
+
+== uuid ==
+SELECT item.id
+FROM item
+WHERE (item.created_at, CAST(item.id AS UUID)) < ($1::TIMESTAMP WITH TIME ZONE, $2::UUID) ORDER BY item.created_at DESC, CAST(item.id AS UUID) DESC
+param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+param_2 = UUID('abcdef01-2345-6789-abcd-ef0123456789')
+
+== uuid_as_text ==
+SELECT item.id
+FROM item
+WHERE (CAST(item.id AS UUID)) > ($1::UUID) ORDER BY CAST(item.id AS UUID) ASC
+param_1 = 'abcdef01-2345-6789-abcd-ef0123456789'

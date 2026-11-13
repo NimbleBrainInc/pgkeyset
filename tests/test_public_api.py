@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from importlib.metadata import version
 from typing import Any
 
 import pgkeyset
@@ -28,6 +29,10 @@ def test_the_package_exports() -> None:
         "Listing",
         "Sort",
     ]
+
+
+def test_the_version_is_the_installed_distribution_version() -> None:
+    assert pgkeyset.__version__ == version("pgkeyset")
 
 
 def test_a_bad_cursor_is_a_value_error_with_fixed_text() -> None:

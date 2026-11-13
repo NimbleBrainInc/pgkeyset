@@ -3,8 +3,10 @@ name: Release
 # A version tag (v0.1.0) builds the distributions once, tests the exact files built, and
 # publishes them to PyPI with trusted publishing (OIDC): no API token exists anywhere. PyPI
 # trusts this repository, this file (release.yml) and the `pypi` environment by name. Only
-# admins can push a version tag, and a version can never be uploaded twice, so nothing is
-# published until the built wheel has passed the shipped test suite on every supported Python.
+# admins can push a version tag, the tagged commit must already be on main, the `pypi`
+# environment waits for a maintainer's approval, and a version can never be uploaded twice, so
+# nothing is published until the built wheel has passed the shipped test suite on every
+# supported Python.
 
 on:
   push:
@@ -22,6 +24,11 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "tag ${GITHUB_REF_NAME} points at $GITHUB_SHA, which is not on main"; exit 1; }
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: "3.13"
@@ -51,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
+        python: ["3.12", "3.13", "3.14"]
     services:
       postgres:
         image: postgres:17-alpine

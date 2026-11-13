@@ -13,8 +13,9 @@ that declaration, so it is written nowhere else:
     NULL is NULL. Bound values are typed like their columns, so asyncpg gets a ``datetime``
     for a ``timestamptz``.
   * The cursor, ``base64url(JSON [listing, *key])``, with each timestamp as ISO-8601 carrying
-    its zone and each ``numeric`` as its decimal string. The listing tag means a cursor from
-    another read is refused rather than read as a position in an order it never came from.
+    its zone, each ``numeric`` as its decimal string and each ``uuid`` in its canonical form.
+    The listing tag means a cursor from another read is refused rather than read as a position
+    in an order it never came from.
 
 Any cursor that does not decode as a position in this listing raises :class:`InvalidCursor`,
 whose text is fixed: a parse failure's message never reaches the wire.
@@ -25,6 +26,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,12 +38,14 @@ from sqlalchemy.sql.elements import ColumnClause, Label
 from sqlalchemy.types import (
     BigInteger,
     DateTime,
+    Enum,
     Float,
     Integer,
     Numeric,
     SmallInteger,
     String,
     TypeEngine,
+    Uuid,
 )
 
 __all__ = ["INVALID_CURSOR_MESSAGE", "InvalidCursor", "Listing", "Sort"]
@@ -49,7 +53,17 @@ __all__ = ["INVALID_CURSOR_MESSAGE", "InvalidCursor", "Listing", "Sort"]
 INVALID_CURSOR_MESSAGE = "The cursor is not a position in this listing."
 
 # The value kinds a key can hold, and so the kinds a cursor can carry back.
-_Kind = Literal["ts", "int", "str", "num"]
+_Kind = Literal["ts", "int", "str", "num", "uuid"]
+
+# The longest cursor decoded. A real key is far shorter; a longer string is refused before it is
+# base64- and JSON-decoded, so a caller cannot make the server parse an arbitrarily large blob.
+_MAX_CURSOR_CHARS = 1 << 20
+
+# The ``numeric`` values asyncpg and Postgres carry exactly: at most 131072 digits before the
+# decimal point and 16383 after it. Past the first, asyncpg binds the value as 0; past the
+# second, the driver refuses it.
+_NUMERIC_MAX_ADJUSTED = 131071
+_NUMERIC_MIN_EXPONENT = -16383
 
 
 class InvalidCursor(ValueError):
@@ -91,6 +105,8 @@ class Sort:
         nulls: Literal["first", "last"] | None = None,
         value: Callable[[Any], Any] | None = None,
     ) -> Sort:
+        """``expr`` ascending. ``nulls`` places a nullable column's NULL band ``"first"`` or
+        ``"last"``; ``value`` reads a computed expression's key from a fetched row."""
         return cls(expr, descending=False, nulls=nulls, value=value)
 
     @classmethod
@@ -101,6 +117,7 @@ class Sort:
         nulls: Literal["first", "last"] | None = None,
         value: Callable[[Any], Any] | None = None,
     ) -> Sort:
+        """``expr`` descending. ``nulls`` and ``value`` are as for :meth:`asc`."""
         return cls(expr, descending=True, nulls=nulls, value=value)
 
     def __post_init__(self) -> None:
@@ -219,8 +236,11 @@ class Listing:
         """Split a ``limit + 1`` fetch into ``(page, next_cursor)``.
 
         The extra row exists only when another page does. ``next_cursor`` then encodes the last
-        row KEPT, read from the raw row, and is None on the last page.
+        row KEPT, read from the raw row, and is None on the last page. A negative ``limit`` is a
+        server bug, and raises ``ValueError``.
         """
+        if limit < 0:
+            raise ValueError(f"{self!r}: limit must not be negative, got {limit}")
         page = list(rows[:limit])
         if len(rows) > limit and page:
             return page, self.encode(self.key(page[-1]))
@@ -233,24 +253,36 @@ class Listing:
     # --- the cursor --------------------------------------------------------- #
 
     def encode(self, key: Sequence[Any]) -> str:
-        """``base64url(JSON [listing, *key])``. A naive timestamp is a server bug, and raises."""
+        """``base64url(JSON [listing, *key])``.
+
+        A key the cursor could not carry back is a server bug, and raises ``ValueError``: a
+        naive timestamp, a non-finite ``numeric``, or a float for a ``numeric`` column.
+        """
         if len(key) != len(self.order):
             raise ValueError(f"{self!r} keys have {len(self.order)} parts, got {len(key)}")
         parts: list[Any] = [self.name]
-        for value in key:
+        for sort, value in zip(self.order, key, strict=True):
             if isinstance(value, datetime):
                 if value.tzinfo is None:
                     raise ValueError(f"{self!r}: a naive timestamp cannot name a position")
                 value = value.isoformat()
             elif isinstance(value, Decimal):
+                if not value.is_finite():
+                    raise ValueError(f"{self!r}: a non-finite numeric cannot name a position")
                 # A JSON number is a float to most readers; the digits are the position.
                 value = str(value)
+            elif isinstance(value, uuid.UUID):
+                value = str(value)
+            elif isinstance(value, float) and sort.kind == "num":
+                raise ValueError(f"{self!r}: read a numeric key as Decimal, not float")
             parts.append(value)
         raw = json.dumps(parts, separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
     def decode(self, cursor: str) -> tuple[Any, ...]:
         """The position ``cursor`` names in this listing, or :class:`InvalidCursor`."""
+        if not isinstance(cursor, str) or len(cursor) > _MAX_CURSOR_CHARS:
+            raise InvalidCursor
         try:
             padded = cursor + "=" * (-len(cursor) % 4)
             parts = json.loads(base64.urlsafe_b64decode(padded.encode()))
@@ -274,9 +306,25 @@ def _kind(type_: TypeEngine[Any]) -> _Kind:
         return "ts"
     if isinstance(type_, Integer):
         return "int"
+    if isinstance(type_, Enum):
+        # A Python enum class maps a member to a stored label the cursor would have to carry
+        # back through the class; a string enum's labels are the values themselves.
+        if type_.enum_class is not None:
+            raise TypeError(
+                "a cursor cannot carry a Python-enum sort key: declare the column with string "
+                "labels, Enum('a', 'b', name=...)"
+            )
+        return "str"
     if isinstance(type_, String):
         return "str"
+    if isinstance(type_, Uuid):
+        return "uuid"
     if isinstance(type_, Numeric) and not isinstance(type_, Float):
+        if not type_.asdecimal:
+            raise TypeError(
+                "a numeric sort column must be read as Decimal: asdecimal=False returns floats, "
+                "whose cursor value is not the value the row holds"
+            )
         return "num"
     raise TypeError(f"a cursor cannot carry a {type_!r} sort key")
 
@@ -324,7 +372,16 @@ def _parse(value: Any, sort: Sort) -> Any:
         # NaN and the infinities parse, and neither is a position a numeric row holds.
         if not number.is_finite():
             raise ValueError("non-finite decimal")
+        _check_numeric(number, sort.expr.type)
         return number
+    if sort.kind == "uuid":
+        if not isinstance(value, str):
+            raise TypeError("uuid")
+        parsed_uuid = uuid.UUID(value)
+        # Only the canonical spelling this library issues names a position.
+        if str(parsed_uuid) != value:
+            raise ValueError("non-canonical uuid")
+        return parsed_uuid if getattr(sort.expr.type, "as_uuid", True) else value
     if not isinstance(value, str):
         raise TypeError("str")
     # Postgres text holds only UTF-8 with no NUL. Anything else the driver refuses at execute;
@@ -332,7 +389,41 @@ def _parse(value: Any, sort: Sort) -> Any:
     if "\x00" in value:
         raise ValueError("NUL in a string key")
     value.encode("utf-8")
+    type_ = sort.expr.type
+    if isinstance(type_, Enum) and value not in type_.enums:
+        raise ValueError("not a label of the enum")
     return value
+
+
+def _check_numeric(number: Decimal, type_: TypeEngine[Any]) -> None:
+    """Refuse a ``numeric`` the driver would bind as another value, or the column cannot hold.
+
+    Pure digit arithmetic on the decimal's tuple, never a context operation, so a value with an
+    enormous exponent is measured without being rounded first.
+    """
+    _, digits, exponent = number.as_tuple()
+    if not isinstance(exponent, int):  # NaN or an infinity: refused by the caller already
+        raise ValueError("non-finite decimal")
+    zero = not any(digits)
+    if exponent < _NUMERIC_MIN_EXPONENT:
+        raise ValueError("numeric scale out of range")
+    if not zero and number.adjusted() > _NUMERIC_MAX_ADJUSTED:
+        raise ValueError("numeric out of range")
+    precision = getattr(type_, "precision", None)
+    if precision is None:
+        return
+    # A declared NUMERIC(p, s) holds at most p - s digits before the point and s after it.
+    # A cursor beyond either is not a value any row holds, and the bind's cast would round it
+    # or overflow.
+    scale = getattr(type_, "scale", None) or 0
+    trailing = 0
+    if not zero:
+        while trailing < len(digits) - 1 and digits[len(digits) - 1 - trailing] == 0:
+            trailing += 1
+    fraction_digits = 0 if zero else max(0, -(exponent + trailing))
+    integer_digits = 0 if zero else max(0, number.adjusted() + 1)
+    if fraction_digits > scale or integer_digits > precision - scale:
+        raise ValueError("numeric outside the column's precision")
 
 
 # Bind widths for the integer types narrower or wider than Postgres ``integer``, matched by
