@@ -17,4 +17,4 @@ proves a listing never skips or repeats a row.
 from .core import INVALID_CURSOR_MESSAGE, InvalidCursor, Listing, Sort
 
 __all__ = ["INVALID_CURSOR_MESSAGE", "InvalidCursor", "Listing", "Sort"]
-__version__ = "0.1.1"
+__version__ = "0.2.0"

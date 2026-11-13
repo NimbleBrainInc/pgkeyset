@@ -14,6 +14,8 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -51,6 +53,54 @@ TICKET = sa.Table(
     sa.Column("id", sa.Uuid, primary_key=True),
     sa.Column("priority", PRIORITY, nullable=False),
     sa.Column("amount", sa.Numeric(10, 2), nullable=False),
+)
+
+
+class UTCDateTime(sa.types.TypeDecorator[datetime]):
+    """``timestamptz`` that hands back an aware UTC datetime on any dialect.
+
+    The shape an application uses to run one store on Postgres and on a database with no
+    timezone storage: normalize to UTC on the way in, re-attach UTC on the way out.
+    """
+
+    impl = sa.DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: sa.Dialect) -> datetime | None:
+        if value is None:
+            return None
+        value = value.astimezone(UTC)
+        return value.replace(tzinfo=None) if dialect.name == "sqlite" else value
+
+    def process_result_value(self, value: datetime | None, dialect: sa.Dialect) -> datetime | None:
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
+
+
+class Passthrough(sa.types.TypeDecorator[Any]):
+    """A decorator that changes nothing, wrapping another, to prove nesting unwraps."""
+
+    impl = sa.Text
+    cache_ok = True
+
+    def __init__(self, inner: sa.types.TypeEngine[Any]) -> None:
+        super().__init__()
+        # Kept as an attribute named like the parameter, so SQLAlchemy's cache key tells two
+        # Passthroughs over different types apart.
+        self.inner = inner
+        self.impl = inner
+
+
+#: Every sort column wrapped in a TypeDecorator: keys are classified by the stored type, and
+#: binds go through the decorator.
+LEDGER = sa.Table(
+    "ledger",
+    METADATA,
+    sa.Column("id", Passthrough(sa.Uuid()), primary_key=True),
+    sa.Column("posted_at", UTCDateTime(), nullable=False),
+    sa.Column("rank", Passthrough(sa.SmallInteger()), nullable=False),
+    sa.Column("amount", Passthrough(sa.Numeric(10, 2)), nullable=False),
 )
 
 
@@ -120,6 +170,7 @@ async def engine(provisioned_db: str) -> AsyncIterator[AsyncEngine]:
         async with built.begin() as conn:
             await conn.execute(ITEM.delete())
             await conn.execute(TICKET.delete())
+            await conn.execute(LEDGER.delete())
         yield built
     finally:
         await built.dispose()

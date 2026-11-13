@@ -1,6 +1,6 @@
 [project]
 name = "pgkeyset"
-version = "0.1.1"
+version = "0.2.0"
 description = "Strict keyset pagination for async SQLAlchemy on Postgres, for APIs and agent tools. Refuses at declaration the orders that silently lose or repeat rows, tags each cursor with its listing, and fails a bad cursor with one safe message."
 readme = "README.md"
 license = "Apache-2.0"
@@ -31,6 +31,8 @@ Changelog = "https://github.com/NimbleBrainInc/pgkeyset/blob/main/CHANGELOG.md"
 # asyncpg is test-only. The walk suites run against a real Postgres: NULL ordering and the
 # typed binds asyncpg insists on are the things under test, and a fake has neither.
 dev = [
+    # aiosqlite is for the one SQLite smoke test (tests/test_sqlite_smoke.py), not a support claim.
+    "aiosqlite>=0.20",
     "asyncpg>=0.30",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
@@ -61,6 +63,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["sqlite: the SQLite smoke test of the TypeDecorator path; not a support claim"]
 
 [tool.uv]
 # Resolve only releases at least two weeks old, so a dependency published hours ago (or a

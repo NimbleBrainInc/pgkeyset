@@ -87,6 +87,8 @@ unique: declare your primary key there.
 | `numeric`, `numeric(p, s)` | its exact decimal string, checked against the range the driver carries and against `p` and `s` when declared | `Decimal` |
 | `uuid` (`Uuid`, `postgresql.UUID`) | its canonical lowercase form | `uuid.UUID`, or `str` for `Uuid(as_uuid=False)` |
 
+Column types wrapped in a TypeDecorator are classified by their underlying type.
+
 Other types are refused at declaration, including `date`, `time`, `interval`, `boolean`,
 `bytea`, floats and JSON. Sort by one of the types above instead, for example a `date` column
 cast to `timestamptz`, with `value=` reading the cast value from the row.
