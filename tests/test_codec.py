@@ -200,3 +200,175 @@ def test_a_declaration_that_cannot_page_safely_is_refused() -> None:
         Sort.asc(sa.column("blob", sa.LargeBinary()))
     with pytest.raises(ValueError):
         Listing("x")
+
+
+# --- numeric: the range the driver carries, and a declared precision and scale -------------- #
+
+AMOUNT = Listing(
+    "amount", Sort.asc(sa.cast(ITEM.c.id, sa.Numeric), value=lambda r: 0), Sort.asc(ITEM.c.id)
+)
+PRICE = Listing(
+    "price", Sort.asc(sa.cast(ITEM.c.id, sa.Numeric(10, 2)), value=lambda r: 0), Sort.asc(ITEM.c.id)
+)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "1E+131071",  # the largest magnitude asyncpg binds exactly
+        "-1E+131071",
+        "1E-16383",  # the smallest scale it carries
+        "0E+200000",  # a zero carries no digits, whatever its exponent
+        "1." + "0" * 16383,
+        "123.4560000",
+    ],
+)
+def test_a_numeric_inside_the_driver_range_decodes(value: str) -> None:
+    assert AMOUNT.decode(_raw(["amount", value, "it_1"])) == (Decimal(value), "it_1")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "1E+131072",  # asyncpg would bind it as 0: the walk would resume somewhere else
+        "1E+200000",
+        "9" * 131073,
+        "-1E+131072",
+        "1E-16384",  # the driver refuses it with its own error text
+        "0E-20000",
+        "12E-16384",
+        "1." + "0" * 16384,
+    ],
+)
+def test_a_numeric_outside_the_driver_range_is_refused(value: str) -> None:
+    with pytest.raises(InvalidCursor) as raised:
+        AMOUNT.decode(_raw(["amount", value, "it_1"]))
+    assert str(raised.value) == INVALID_CURSOR_MESSAGE
+
+
+def test_a_numeric_fits_its_declared_precision_and_scale() -> None:
+    for fits in ("12345678.99", "-12345678.99", "0.5", "1.50", "1.500", "0", "0E+50", "1E+7"):
+        assert PRICE.decode(_raw(["price", fits, "it_1"])) == (Decimal(fits), "it_1")
+    # More decimals than the column holds would round in the bind's cast; more integer digits
+    # would overflow it. No row holds either, so neither is a position.
+    for beyond in ("1.005", "0.001", "123456789.0", "1E+8", "1E+20"):
+        with pytest.raises(InvalidCursor):
+            PRICE.decode(_raw(["price", beyond, "it_1"]))
+
+
+def test_a_numeric_without_a_declared_scale_holds_integers() -> None:
+    whole = Listing(
+        "whole", Sort.asc(sa.cast(ITEM.c.id, sa.Numeric(5)), value=lambda r: 0), Sort.asc(ITEM.c.id)
+    )
+    assert whole.decode(_raw(["whole", "99999", "it_1"])) == (Decimal("99999"), "it_1")
+    for beyond in ("100000", "1.5"):
+        with pytest.raises(InvalidCursor):
+            whole.decode(_raw(["whole", beyond, "it_1"]))
+
+
+@pytest.mark.parametrize(
+    ("precision", "scale", "holds", "beyond"),
+    [
+        # A negative scale rounds left of the point: multiples of 100, below 10^5.
+        (3, -2, ["1200", "99900", "-99900", "1.2E+3", "0", "0.00"], ["1250", "1200.5", "100000"]),
+        # A scale above the precision: values below 10^-1, to three places.
+        (2, 3, ["0.012", "0.099", "-0.099", "0.010", "0"], ["0.0125", "0.1", "1"]),
+        # The ordinary shape, at both edges.
+        (10, 2, ["99999999.99", "0.01", "1.500"], ["100000000", "0.001"]),
+    ],
+)
+def test_a_numeric_fits_any_declared_precision_and_scale(
+    precision: int, scale: int, holds: list[str], beyond: list[str]
+) -> None:
+    """Postgres allows a negative scale and a scale above the precision; each issued value
+    round-trips, and each value the column could not hold is refused."""
+    listing = Listing(
+        "n",
+        Sort.asc(sa.column("n", sa.Numeric(precision, scale))),
+        Sort.asc(sa.column("id", sa.Text)),
+    )
+    for value in holds:
+        key = (Decimal(value), "it_1")
+        assert listing.decode(listing.encode(key)) == key
+    for value in beyond:
+        with pytest.raises(InvalidCursor):
+            listing.decode(_raw(["n", value, "it_1"]))
+
+
+def test_a_numeric_read_as_float_cannot_be_a_sort_key() -> None:
+    with pytest.raises(TypeError, match="Decimal"):
+        Sort.asc(sa.cast(ITEM.c.id, sa.Numeric(asdecimal=False)), value=lambda r: 0)
+
+
+def test_encoding_a_numeric_the_cursor_cannot_carry_is_a_server_bug() -> None:
+    for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+        with pytest.raises(ValueError, match="non-finite"):
+            AMOUNT.encode((value, "it_1"))
+    with pytest.raises(ValueError, match="Decimal"):
+        AMOUNT.encode((27.1, "it_1"))
+
+
+# --- enum and uuid keys ------------------------------------------------------------------ #
+
+STATUS = sa.Enum("draft", "sent", "failed", name="item_status")
+
+
+def test_an_enum_position_is_one_of_its_labels() -> None:
+    listing = Listing(
+        "by_status",
+        Sort.asc(sa.cast(ITEM.c.status, STATUS), value=lambda r: 0),
+        Sort.asc(ITEM.c.id),
+    )
+    assert listing.decode(listing.encode(("sent", "it_1"))) == ("sent", "it_1")
+    for not_a_label in ("bogus", "SENT", ""):
+        with pytest.raises(InvalidCursor):
+            listing.decode(_raw(["by_status", not_a_label, "it_1"]))
+
+
+def test_a_python_enum_cannot_be_a_sort_key() -> None:
+    import enum
+
+    class Status(enum.Enum):
+        draft = "d"
+        sent = "s"
+
+    with pytest.raises(TypeError, match="Python-enum"):
+        Sort.asc(sa.cast(ITEM.c.status, sa.Enum(Status, name="st")), value=lambda r: 0)
+
+
+def test_a_uuid_position_travels_in_its_canonical_form() -> None:
+    import uuid
+
+    at = sa.column("created_at", sa.DateTime(timezone=True))
+    as_uuid = Listing("u", Sort.desc(at), Sort.desc(sa.column("id", sa.Uuid)))
+    as_text = Listing("t", Sort.desc(at), Sort.desc(sa.column("id", sa.Uuid(as_uuid=False))))
+    native = Listing("n", Sort.asc(sa.column("id", postgresql.UUID())))
+    key = uuid.UUID("abcdef01-2345-6789-abcd-ef0123456789")
+    cursor = as_uuid.encode((WHEN, key))
+    padded = cursor + "=" * (-len(cursor) % 4)
+    assert json.loads(base64.urlsafe_b64decode(padded))[2] == str(key)
+    assert as_uuid.decode(cursor) == (WHEN, key)
+    assert as_text.decode(as_text.encode((WHEN, str(key)))) == (WHEN, str(key))
+    assert native.decode(native.encode((key,))) == (key,)
+    for not_canonical in (str(key).upper(), key.hex, f"{{{key}}}", f"urn:uuid:{key}", "x", 7):
+        with pytest.raises(InvalidCursor):
+            as_uuid.decode(_raw(["u", WHEN.isoformat(), not_canonical]))
+
+
+# --- the cursor itself, and the page size ------------------------------------------------ #
+
+
+def test_a_cursor_that_is_not_text_or_is_oversized_is_refused() -> None:
+    for not_text in (b"WyJpdGVtcyJd", 7, ["items"]):
+        with pytest.raises(InvalidCursor):
+            NEWEST.decode(not_text)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(InvalidCursor):
+        NEWEST.apply(sa.select(ITEM), b"WyJpdGVtcyJd")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(InvalidCursor):
+        NEWEST.decode("A" * ((1 << 20) + 1))
+
+
+def test_a_negative_page_size_is_a_server_bug() -> None:
+    with pytest.raises(ValueError, match="negative") as raised:
+        NEWEST.paginate([], -1)
+    assert not isinstance(raised.value, InvalidCursor)

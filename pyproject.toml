@@ -1,13 +1,13 @@
 [project]
 name = "pgkeyset"
-version = "0.1.0"
+version = "0.1.1"
 description = "Strict keyset pagination for async SQLAlchemy on Postgres, for APIs and agent tools. Refuses at declaration the orders that silently lose or repeat rows, tags each cursor with its listing, and fails a bad cursor with one safe message."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "NimbleBrain, Inc." }]
 requires-python = ">=3.12"
-dependencies = ["sqlalchemy>=2.0.36"]
+dependencies = ["sqlalchemy>=2.0.37"]
 keywords = ["postgres", "pagination", "keyset", "cursor", "sqlalchemy", "asyncio", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Typing :: Typed",
 ]
@@ -34,7 +35,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
-    "sqlalchemy[asyncio]>=2.0.36",
+    "sqlalchemy[asyncio]>=2.0.37",
     "ty>=0.0.1a1",
 ]
 

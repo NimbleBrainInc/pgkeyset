@@ -17,6 +17,7 @@ the maintainers' explicit sign-off before a golden file is edited.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -57,6 +58,29 @@ SMALL = Listing(
 BIG = Listing(
     "big", Sort.desc(sa.cast(ITEM.c.status, sa.BigInteger), value=lambda r: 0), Sort.desc(ITEM.c.id)
 )
+
+PRICE = Listing(
+    "price",
+    Sort.desc(sa.cast(ITEM.c.status, sa.Numeric(10, 2)), value=lambda r: 0),
+    Sort.desc(ITEM.c.id),
+)
+BY_STATUS = Listing(
+    "by_status",
+    Sort.asc(
+        sa.cast(ITEM.c.status, sa.Enum("draft", "sent", name="item_status")), value=lambda r: 0
+    ),
+    Sort.asc(ITEM.c.id),
+)
+BY_UUID = Listing(
+    "by_uuid",
+    Sort.desc(ITEM.c.created_at),
+    Sort.desc(sa.cast(ITEM.c.id, sa.Uuid), value=lambda r: 0),
+)
+BY_UUID_TEXT = Listing(
+    "by_uuid_text",
+    Sort.asc(sa.cast(ITEM.c.id, sa.Uuid(as_uuid=False)), value=lambda r: 0),
+)
+UID = uuid.UUID("abcdef01-2345-6789-abcd-ef0123456789")
 
 WHEN = datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=UTC)
 HST = timezone(timedelta(hours=-10))
@@ -105,6 +129,13 @@ CASES: dict[str, tuple[Listing, tuple[Any, ...], tuple[Any, ...]]] = {
     # Ints at their column widths; a bigint past a float's 53 bits stays exact.
     "smallint": (SMALL, (-32768, "it_9"), (-32768, "it_9")),
     "bigint": (BIG, (2**53 + 1, "it_9"), (2**53 + 1, "it_9")),
+    # A declared numeric(10, 2): its scale stays in the cursor and the bind's cast.
+    "num_scaled": (PRICE, (Decimal("12345678.90"), "it_8"), (Decimal("12345678.90"), "it_8")),
+    # A string enum's label, bound as the enum type.
+    "enum": (BY_STATUS, ("sent", "it_5"), ("sent", "it_5")),
+    # A uuid travels in its canonical lowercase form, and decodes to a UUID or to text.
+    "uuid": (BY_UUID, (WHEN, UID), (WHEN, UID)),
+    "uuid_as_text": (BY_UUID_TEXT, (str(UID),), (str(UID),)),
 }
 
 

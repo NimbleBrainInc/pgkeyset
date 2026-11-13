@@ -42,6 +42,17 @@ ITEM = sa.Table(
     sa.Column("status", sa.Text, nullable=False),
 )
 
+#: The table for the key kinds asyncpg binds by type: a ``uuid`` id, a native Postgres enum
+#: (which sorts by its labels' declared order, not alphabetically), and a ``numeric(10, 2)``.
+PRIORITY = sa.Enum("low", "high", "urgent", name="ticket_priority")
+TICKET = sa.Table(
+    "ticket",
+    METADATA,
+    sa.Column("id", sa.Uuid, primary_key=True),
+    sa.Column("priority", PRIORITY, nullable=False),
+    sa.Column("amount", sa.Numeric(10, 2), nullable=False),
+)
+
 
 def _admin_engine() -> AsyncEngine:
     return create_async_engine(_ADMIN_URL, isolation_level="AUTOCOMMIT")
@@ -108,6 +119,7 @@ async def engine(provisioned_db: str) -> AsyncIterator[AsyncEngine]:
     try:
         async with built.begin() as conn:
             await conn.execute(ITEM.delete())
+            await conn.execute(TICKET.delete())
         yield built
     finally:
         await built.dispose()

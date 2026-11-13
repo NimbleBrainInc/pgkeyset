@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its older run; every run on main finishes, so each
+# merged commit keeps its own result.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Format, lint and types once, on the newest Python.
@@ -37,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
+        python: ["3.12", "3.13", "3.14"]
         postgres: ["14", "17"]
     services:
       postgres:
@@ -63,10 +65,61 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q
 
-  # One required check that stands for the matrix, so branch rules need not list each cell.
+  # The suite with every direct dependency at the lowest version pyproject.toml allows, so a
+  # declared floor is one the code actually works on. Resolves fresh, ignoring uv.lock.
+  lowest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 25
+    env:
+      PGKEYSET_TEST_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --resolution lowest-direct
+      - run: uv run --no-sync pytest -q
+
+  # The distributions build and their metadata is valid on every change, not first at release.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - run: uv build
+      - run: uvx --from "twine==7.0.0" twine check --strict dist/*
+      - name: The wheel installs, imports, and reports its own version
+        run: |
+          version=$(uv version --short)
+          uv run --isolated --no-project --with dist/*.whl python -c "import pgkeyset, sys; assert pgkeyset.__version__ == sys.argv[1], pgkeyset.__version__" "$version"
+
+  # One required check that stands for the jobs above, so branch rules need not list each cell.
   verify:
     if: always()
-    needs: [check, test]
+    needs: [check, test, lowest, build]
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.check.result }}" = success && test "${{ needs.test.result }}" = success
+      - run: |
+          test "${{ needs.check.result }}" = success
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.lowest.result }}" = success
+          test "${{ needs.build.result }}" = success
