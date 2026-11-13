@@ -44,6 +44,7 @@ from sqlalchemy.types import (
     Numeric,
     SmallInteger,
     String,
+    TypeDecorator,
     TypeEngine,
     Uuid,
 )
@@ -121,7 +122,7 @@ class Sort:
         return cls(expr, descending=True, nulls=nulls, value=value)
 
     def __post_init__(self) -> None:
-        _kind(self.expr.type)  # refuse a type the cursor cannot carry, at declaration
+        _kind(_base(self.expr.type))  # refuse a type the cursor cannot carry, at declaration
         if self.nulls is None and getattr(self.expr, "nullable", False):
             raise ValueError(
                 f"{self.expr} is nullable: declare where its NULLs sort with nulls='first' "
@@ -132,7 +133,7 @@ class Sort:
 
     @property
     def kind(self) -> _Kind:
-        return _kind(self.expr.type)
+        return _kind(_base(self.expr.type))
 
     @property
     def nullable(self) -> bool:
@@ -152,6 +153,8 @@ class Sort:
         return row[_row_key(self.expr)]
 
     def bind(self, value: Any) -> ColumnElement[Any]:
+        # Typed with the column's own type, a TypeDecorator included, so its bind processing
+        # runs on the cursor value exactly as on a value written to the column.
         return literal(value, self.expr.type)
 
     def equals(self, value: Any) -> ColumnElement[bool]:
@@ -299,6 +302,19 @@ class Listing:
             raise InvalidCursor from None
 
 
+def _base(type_: TypeEngine[Any]) -> TypeEngine[Any]:
+    """The type a column stores: a TypeDecorator, nested or not, is read as its underlying type.
+
+    Every rule about what a key may hold (its kind, timezone, width, precision, enum labels)
+    applies to what the database stores. The cursor carries the value a fetched row holds, and
+    binds it back through the decorator, so the decorator's Python value must be of the same
+    kind as its stored type, as a decorator that normalizes timestamps to UTC is.
+    """
+    while isinstance(type_, TypeDecorator):
+        type_ = type_.impl_instance
+    return type_
+
+
 def _kind(type_: TypeEngine[Any]) -> _Kind:
     if isinstance(type_, DateTime):
         if not type_.timezone:
@@ -357,7 +373,7 @@ def _parse(value: Any, sort: Sort) -> Any:
         if not isinstance(value, int) or isinstance(value, bool):
             raise TypeError("int")
         # The driver binds an int at its column type's width and refuses one that does not fit.
-        type_ = sort.expr.type
+        type_ = _base(sort.expr.type)
         bits = next((b for t, b in _INT_BITS.items() if isinstance(type_, t)), 32)
         if not -(1 << (bits - 1)) <= value < (1 << (bits - 1)):
             raise ValueError("int out of range")
@@ -372,7 +388,7 @@ def _parse(value: Any, sort: Sort) -> Any:
         # NaN and the infinities parse, and neither is a position a numeric row holds.
         if not number.is_finite():
             raise ValueError("non-finite decimal")
-        _check_numeric(number, sort.expr.type)
+        _check_numeric(number, _base(sort.expr.type))
         return number
     if sort.kind == "uuid":
         if not isinstance(value, str):
@@ -381,7 +397,7 @@ def _parse(value: Any, sort: Sort) -> Any:
         # Only the canonical spelling this library issues names a position.
         if str(parsed_uuid) != value:
             raise ValueError("non-canonical uuid")
-        return parsed_uuid if getattr(sort.expr.type, "as_uuid", True) else value
+        return parsed_uuid if getattr(_base(sort.expr.type), "as_uuid", True) else value
     if not isinstance(value, str):
         raise TypeError("str")
     # Postgres text holds only UTF-8 with no NUL. Anything else the driver refuses at execute;
@@ -389,7 +405,7 @@ def _parse(value: Any, sort: Sort) -> Any:
     if "\x00" in value:
         raise ValueError("NUL in a string key")
     value.encode("utf-8")
-    type_ = sort.expr.type
+    type_ = _base(sort.expr.type)
     if isinstance(type_, Enum) and value not in type_.enums:
         raise ValueError("not a label of the enum")
     return value

@@ -6,6 +6,20 @@ All notable changes to this project are recorded here. The format follows
 The cursor encoding and the SQL a cursor resumes with are pinned by golden tests; a change to
 either is a breaking change in any version.
 
+## [0.2.0] - 2026-11-13
+
+Cursors issued by 0.1.x decode and resume exactly as before; the golden cursor and SQL files are
+unchanged.
+
+### Added
+
+- A sort column whose type is a SQLAlchemy `TypeDecorator`, nested or not, is classified by the
+  type it stores: its kind, the timezone-aware timestamp rule, integer width, numeric precision
+  and scale, enum labels and uuid form all follow the stored type. Binds stay typed with the
+  decorator, so its processing runs on a cursor value as on a written one. A decorator over a
+  naive `DateTime` is still refused. The decorator's Python value must be of the same kind as
+  its stored type.
+
 ## [0.1.1] - 2026-11-13
 
 Cursors issued by 0.1.0 decode and resume exactly as before; the golden cursor and SQL files
@@ -54,5 +68,6 @@ First release.
   the JSON parser's recursion limit.
 - `pgkeyset.testing.walk`: walks a listing to its end, failing on a row met twice or never met.
 
+[0.2.0]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.2.0
 [0.1.1]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.1.1
 [0.1.0]: https://github.com/NimbleBrainInc/pgkeyset/releases/tag/v0.1.0
