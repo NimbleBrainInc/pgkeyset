@@ -410,19 +410,18 @@ def _check_numeric(number: Decimal, type_: TypeEngine[Any]) -> None:
     if not zero and number.adjusted() > _NUMERIC_MAX_ADJUSTED:
         raise ValueError("numeric out of range")
     precision = getattr(type_, "precision", None)
-    if precision is None:
+    if precision is None or zero:
         return
-    # A declared NUMERIC(p, s) holds at most p - s digits before the point and s after it.
-    # A cursor beyond either is not a value any row holds, and the bind's cast would round it
-    # or overflow.
+    # A declared NUMERIC(p, s) rounds a value to s decimal places (to 10^-s, so a negative s
+    # rounds left of the point) and holds it only if its absolute value is below 10^(p - s).
+    # Postgres allows a negative s and an s above p, so neither measure is clamped. A cursor
+    # whose last significant digit is finer than 10^-s is not a value any row holds, and the
+    # bind's cast would round it; one at or above 10^(p - s) would overflow.
     scale = getattr(type_, "scale", None) or 0
     trailing = 0
-    if not zero:
-        while trailing < len(digits) - 1 and digits[len(digits) - 1 - trailing] == 0:
-            trailing += 1
-    fraction_digits = 0 if zero else max(0, -(exponent + trailing))
-    integer_digits = 0 if zero else max(0, number.adjusted() + 1)
-    if fraction_digits > scale or integer_digits > precision - scale:
+    while trailing < len(digits) - 1 and digits[len(digits) - 1 - trailing] == 0:
+        trailing += 1
+    if exponent + trailing < -scale or number.adjusted() >= precision - scale:
         raise ValueError("numeric outside the column's precision")
 
 

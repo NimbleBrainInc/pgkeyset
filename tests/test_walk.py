@@ -251,3 +251,52 @@ async def test_walk_catches_an_offset_listing(engine: AsyncEngine) -> None:
             expected=expected | {"it_00", "it_01"},
             between_pages=remove_one_already_read,
         )
+
+
+async def test_unusual_numeric_scales_walk_on_postgres(engine: AsyncEngine) -> None:
+    """``numeric(3, -2)`` and ``numeric(2, 3)`` (Postgres 15+): every row is a page boundary,
+    so every value the column holds goes out in a cursor and comes back as a position."""
+    async with engine.connect() as conn:
+        version = (await conn.execute(sa.text("SHOW server_version_num"))).scalar_one()
+    if int(version) < 150000:
+        pytest.skip("Postgres before 15 allows neither a negative scale nor one above precision")
+    meta = sa.MetaData()
+    scaled = sa.Table(
+        "scaled",
+        meta,
+        sa.Column("id", sa.Text, primary_key=True),
+        sa.Column("hundreds", sa.Numeric(3, -2), nullable=False),
+        sa.Column("fine", sa.Numeric(2, 3), nullable=False),
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(meta.create_all)
+        await conn.execute(
+            scaled.insert(),
+            [
+                {"id": f"s{i}", "hundreds": Decimal(h), "fine": Decimal(f)}
+                for i, (h, f) in enumerate(
+                    [("1200", "0.012"), ("99900", "0.099"), ("0", "0"), ("-500", "-0.010")] * 2
+                )
+            ],
+        )
+    try:
+        for listing in (
+            Listing("by_hundreds", Sort.desc(scaled.c.hundreds), Sort.asc(scaled.c.id)),
+            Listing("by_fine", Sort.asc(scaled.c.fine), Sort.desc(scaled.c.id)),
+        ):
+
+            async def fetch(
+                cursor: str | None, listing: Listing = listing
+            ) -> tuple[list[sa.RowMapping], str | None]:
+                async with engine.connect() as conn:
+                    stmt = listing.apply(sa.select(scaled), cursor).limit(2)
+                    page = (await conn.execute(stmt)).mappings().all()
+                return listing.paginate(page, 1)
+
+            walked = await walk(
+                fetch, ident=lambda r: r["id"], expected={f"s{i}" for i in range(8)}
+            )
+            assert len(walked) == 8
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(meta.drop_all)

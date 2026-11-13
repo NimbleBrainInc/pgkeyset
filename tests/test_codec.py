@@ -266,6 +266,35 @@ def test_a_numeric_without_a_declared_scale_holds_integers() -> None:
             whole.decode(_raw(["whole", beyond, "it_1"]))
 
 
+@pytest.mark.parametrize(
+    ("precision", "scale", "holds", "beyond"),
+    [
+        # A negative scale rounds left of the point: multiples of 100, below 10^5.
+        (3, -2, ["1200", "99900", "-99900", "1.2E+3", "0", "0.00"], ["1250", "1200.5", "100000"]),
+        # A scale above the precision: values below 10^-1, to three places.
+        (2, 3, ["0.012", "0.099", "-0.099", "0.010", "0"], ["0.0125", "0.1", "1"]),
+        # The ordinary shape, at both edges.
+        (10, 2, ["99999999.99", "0.01", "1.500"], ["100000000", "0.001"]),
+    ],
+)
+def test_a_numeric_fits_any_declared_precision_and_scale(
+    precision: int, scale: int, holds: list[str], beyond: list[str]
+) -> None:
+    """Postgres allows a negative scale and a scale above the precision; each issued value
+    round-trips, and each value the column could not hold is refused."""
+    listing = Listing(
+        "n",
+        Sort.asc(sa.column("n", sa.Numeric(precision, scale))),
+        Sort.asc(sa.column("id", sa.Text)),
+    )
+    for value in holds:
+        key = (Decimal(value), "it_1")
+        assert listing.decode(listing.encode(key)) == key
+    for value in beyond:
+        with pytest.raises(InvalidCursor):
+            listing.decode(_raw(["n", value, "it_1"]))
+
+
 def test_a_numeric_read_as_float_cannot_be_a_sort_key() -> None:
     with pytest.raises(TypeError, match="Decimal"):
         Sort.asc(sa.cast(ITEM.c.id, sa.Numeric(asdecimal=False)), value=lambda r: 0)
